@@ -1,0 +1,230 @@
+
+/*
+Haejin Lee
+Streams*/
+
+
+// Stream Implementation
+
+// memo0<T>(f: () => T): Memo<T>
+function memo0(f) {
+    let r = { evaluated: false };
+    return {
+        get() {
+          if (! r.evaluated) { r = { evaluated: true, v: f() } }
+          return r.v;
+        }
+    };
+}
+// sempty: Stream<T>
+const sempty = {
+    isEmpty: () => true,
+    toString: () => 'sempty',    
+    map: f => sempty,
+    filter: pred => sempty,
+};
+// snode<T>(head: T, tail: Memo<Stream<T>>): Stream<T>
+function snode(head, tail) {
+    return {
+        isEmpty: () => false,
+        head: () => head,
+        tail: tail.get,
+        toString: () => "snode(" + head.toString() + ", " + tail.toString() + ")",
+        map: f => snode(f(head), memo0(() => tail.get().map(f))),
+        filter: pred => pred(head) ?
+                  snode(head, memo0(() => tail.get().filter(pred)))
+                : tail.get().filter(pred),
+    }
+}
+
+/* function addSeries takes two streams of coefficients for the series s(x) and t(x)
+and returns the stream of coefficients for the sum s(x) + t(x).
+For example, given 1+2x+3x
+2+... and 2+6x+9x
+2+..., the result will be 3+8x+12x
+2+...*/
+function addSeries(s1, s2) {
+  if (s1.isEmpty() && s2.isEmpty()) { return sempty;} // if both are empty, return sempty
+  if (s1.isEmpty()) { return s2;} // if only s1 is empty, return s2
+  if (s2.isEmpty()) { return s1;} // if only s2 is empty, return s1
+  return snode(s1.head()+s2.head(), memo0(() => addSeries(s1.tail(), s2.tail()))); // add the coefficients of both streams and iterate to the next in s1 and s2
+}
+
+/* function prodSeries takes two streams of coefficients for the series s(x) and t(x)
+and returns the stream of coefficients for the product s(x) ⋅ t(x).
+For example, given 1+2x+3x
+2+... and 2+6x+9x
+2+..., the result will be 2+10x+27x
+2+...*/
+
+function prodSeries(s1, s2) {
+  if (s1.isEmpty()) { return sempty;} // if we have iterated through s1, then return sempty
+  function prod(x, s) { // helper function (will compute each term in s1 by all of s2)
+    if (s.isEmpty()) { return sempty;} // if s is empty, return sempty
+    return snode(x*s.head(), memo0(() => prod(x, s.tail()))); // multiply current head in s by x, then recurse to s.tail()
+  } 
+  return addSeries(prod(s1.head(), s2), snode(0, memo0( () => prodSeries(s1.tail(), s2)))); // compute product of s1.head() and s2 and add it to product of s1.tail() and s2
+}
+
+/* function derivSeries takes a stream of coefficients for the series s(x), and
+returns a stream of coefficients for the derivative s’(x).
+For example, given 1+2x+3x
+2+..., the result will be 2+6x+...,*/
+
+function derivSeries(s) {
+  function derivHelper(s, pow) {
+    if (s.isEmpty()) { return sempty;} // if we reach the end of the stream, return sempty
+    if (pow === 0) { return derivHelper(s.tail(), 1);} // skip first term because derivative is 0
+    return snode(pow*s.head(), memo0( () => derivHelper(s.tail(), ++pow))); // multiply the power by the coefficient, recurse to next and increment the power
+  }
+  return derivHelper(s, 0); // call helper function with stream s and power 0
+}
+
+/* function coeff takes a stream of coefficients for the series s(x) and a natural
+number n, and returns the array of coefficients of s(x), up to and including that of order n.
+If the stream has fewer coefficients, returns as many as there are.*/
+function coeff(s, n) {
+  let a = [];
+  function get(s, n) {
+    if(n >= 0 && !s.isEmpty()) {
+      a.push(s.head());
+      return get(s.tail(), n-1);
+    } 
+    return a;
+  }
+  return get(s, n);
+}
+
+/* function evalSeries takes a stream of coefficients for the series s(x), and a
+natural number n, and returns a closure. When called with a real number x, this closure
+returns the sum of all terms of s(x) up to and including the term of order n.*/
+function evalSeries(s, n) {
+  return function(x) {
+    let terms = coeff(s,n); // terms stores all terms in stream s up to order n
+    let result = 0;
+    let exp = 0;
+    let add = function(acc,e) {
+      let result = acc + e*Math.pow(x,exp); // compute the sum of the terms of s(x) up to order n
+      ++exp;
+      return result;
+    };
+    return terms.reduce(add,0); // iterate through coefficient array and use add to sum all ther terms
+  }
+}
+
+/* function rec1Series takes a function f and a value v and returns the stream
+representing the infinite series s(x) where a0 = v, and ak+1= f(ak), for all k ≥ 0.*/
+function rec1Series(f, v) {
+  return snode(v, memo0(() => rec1Series(f, f(v)))); // current element is v, then pass in f and f(v) which will be the next element
+}
+
+/* function expSeries w/ no arguments returns the Taylor series for e^x, i.e., the
+coefficients are ak = 1/k!*/
+function expSeries() {
+  let exp2 = (prev, k) => snode(1/(prev*k), memo0(() => exp2(prev*k, k+1)));
+  return snode(1, memo0(() => exp2(1, 1))); // first element is 1, then pass in 1 as prev, and 1 to keep track of k count
+}
+
+/* function recurSeries, takes two arrays, coef and init, assumed of equal positive
+length k, with coef = [c0, c1, …, ck-1]. The function returns the infinite stream of values ai
+given by a k-order recurrence: the first k values are given by init: [a0, a1, …, ak-1]; the following
+values are given by the relation an+k = c0 an + c1 an+1 + ... + ck-1 an+k-1 for all n ≥ 0*/
+function recurSeries(coef, init) {
+  function recurSeries2(count, k, lastK){ // count is the iteration, k is the length of the arrays, lastK is the last k members from stream
+    if (k === 0) {  return sempty;} // if count and init are empty, return sempty
+    if (count < k ) { return snode(init[count], memo0(() => recurSeries2(count+1, k, lastK)));}
+    // if we have iterated through init
+    let result = sum(coef, lastK);
+    lastK.shift(); // take first element out of the lastK array
+    lastK.push(result); // add the result of the sum to the lastK array
+    return snode(result, memo0(() => recurSeries2(count+1, k, lastK)));
+  }
+  function sum(coef, lastK){
+    let result = 0;
+    for (let i = 0; i < lastK.length; ++i) {
+      result += coef[i]*lastK[i]; // multiply all coef members with corresponding last k members in stream
+    }
+    return result;}
+  return recurSeries2(0, init.length, init);
+}
+
+// Testing
+
+let stream = snode(1,memo0(()=>snode(2,
+  memo0(()=>snode(3,
+  memo0(()=>snode(4,
+  memo0(()=>snode(5,
+  memo0(()=>sempty))))))))));
+
+let stream2 = snode(2,memo0(()=>snode(3,
+  memo0(()=>snode(4,
+  memo0(()=>snode(5,
+  memo0(()=>sempty))))))));
+
+let stream3 = snode(1,memo0(()=>snode(1,
+  memo0(()=>sempty))));
+
+test('addSeries works correctly', function() {
+  let s = addSeries(stream,stream2);
+  assert(s.head() === 3);
+  assert(s.tail().head() === 5);
+  assert(s.tail().tail().head() === 7);
+  assert(s.tail().tail().tail().head() === 9);
+  assert(s.tail().tail().tail().tail().head() === 5);
+  assert(s.tail().tail().tail().tail().tail().isEmpty());
+});
+
+test('prodSeries works correctly', function() {
+  let s = prodSeries(stream2, stream3);
+  assert(s.tail().tail().tail().tail().head() === 5);
+  assert(s.tail().tail().tail().tail().tail().isEmpty());
+});
+
+test('derivHelper works correctly', function() {
+  let s = derivSeries(stream);
+  assert(s.head() === 2);
+  assert(s.tail().head() === 6);
+  assert(s.tail().tail().head() === 12);
+  assert(s.tail().tail().tail().head() === 20);
+  assert(s.tail().tail().tail().tail().isEmpty());
+});
+
+test('coeff works correctly', function() {
+  let s = coeff(stream, 2);
+  assert(s[0] === 1);
+  assert(s[1] === 2);
+  assert(s[2] === 3);
+});
+
+test('evalSeries works correctly', function() {
+  assert(evalSeries(stream,1)(2) === 5);
+});
+
+test('rec1Series works correctly', function() {
+  let s = coeff(rec1Series(x => x+1, 0), 10);
+  let count = 0;
+  assert(s.every(x => ++count));
+})
+
+test('expSeries works correctly', function() {
+  let s = expSeries();
+  assert(s.head() === 1);
+  assert(s.tail().head() === 1);
+  assert(s.tail().tail().head() === 1/2);
+  assert(s.tail().tail().tail().head() === 1/6);
+  assert(s.tail().tail().tail().tail().head() === 1/24);
+  assert(s.tail().tail().tail().tail().tail().head() === 1/120);
+});
+
+test('recurSeries works correctly', function() {
+  let s = recurSeries([0,1,2], [0,1,2]);
+  assert(s.head() === 0);
+  assert(s.tail().head() === 1);
+  assert(s.tail().tail().head() === 2);
+  assert(s.tail().tail().tail().head() === 5);
+  assert(s.tail().tail().tail().tail().head() === 12);
+  assert(s.tail().tail().tail().tail().tail().head() === 29);
+  assert(s.tail().tail().tail().tail().tail().tail().head() === 70);
+  assert(s.tail().tail().tail().tail().tail().tail().tail().head() === 169);
+}
+);
